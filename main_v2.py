@@ -43,11 +43,11 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 st.sidebar.header("📤 Upload Real Survey Data")
 uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 
-if uploaded_file is None:
-    st.info("Please upload a CSV file containing real survey responses.")
-    st.stop()
+# if uploaded_file is None:
+#     st.info("Please upload a CSV file containing real survey responses.")
+#     st.stop()
 
-data = pd.read_csv(uploaded_file)
+data = pd.read_csv("PCOS_Data.csv")
 
 # ========== Preprocessing Utilities ==========
 ordinal_maps = {
