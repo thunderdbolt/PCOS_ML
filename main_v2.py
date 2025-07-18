@@ -32,8 +32,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 
 # Streamlit app configuration
-st.set_page_config(page_title="PCOS Detection Tool v4", layout="wide")
-st.title("🧬 PCOS Detection – Real Data Model (Tool v4)")
+st.set_page_config(page_title="PCOS Detection Tool v5", layout="wide")
+st.title("🧬 PCOS Detection – Real Data Model")
 
 # Suppress unnecessary warnings
 warnings.filterwarnings("ignore", category=UserWarning)
