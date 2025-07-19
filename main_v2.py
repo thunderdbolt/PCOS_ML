@@ -1,5 +1,5 @@
 # ========================
-#  PCOS Detection Tool v5
+#  PCOS Detection Tool v7
 # ========================
 
 import os
@@ -114,6 +114,9 @@ def run_selected_combos(combo_matrix, selected_combos, features, target):
             test_size=config["Split"], stratify=target, random_state=42
         )
 
+        test_sample_count = len(y_test)
+        test_flag = "⚠️ Small Test Set" if test_sample_count < 15 else ""
+
         cv = cv_map[config["CV"]]
 
         # Model & param setup
@@ -165,6 +168,8 @@ def run_selected_combos(combo_matrix, selected_combos, features, target):
                 "Sensitivity": round(sensitivity, 2),
                 "Specificity": round(specificity, 2),
                 "Confidence": round(confidence_avg, 2),
+                "# Test Samples": test_sample_count,
+                "Test Set Flag": test_flag,
                 "Search Method": config["Search"],
                 "Model": config["Model"],
                 "n_estimators": params.get("n_estimators", "N/A"),
@@ -189,6 +194,8 @@ def run_selected_combos(combo_matrix, selected_combos, features, target):
                 "Sensitivity": None,
                 "Specificity": None,
                 "Confidence": None,
+                "# Test Samples": test_sample_count,
+                "Test Set Flag": test_flag,
                 "Search Method": config["Search"],
                 "Model": config["Model"],
                 "n_estimators": "N/A",
@@ -225,7 +232,7 @@ tab1, tab2 = st.tabs([
 # ========== Tab 2: Experimentation Panel ==========
 with tab2:
     st.subheader("📋 Uploaded Data Preview")
-    with st.expander("Show DataFrame", expanded=True):
+    with st.expander("Show DataFrame", expanded=False):
         st.dataframe(data, hide_index=True)
 
     # Placeholder: Define features and target
@@ -297,18 +304,61 @@ with tab2:
     # Define a key for the button
     run_key = "run_combos_clicked"
 
-    # Initialize the state if not already set
+    # Initialize state if it doesn't exist
     if run_key not in st.session_state:
         st.session_state[run_key] = False
 
-    # Create the button and update the session state
+    # Create the button
     if st.button("🚀 Run Selected Combos"):
+        st.session_state[run_key] = True  # Mark it as clicked
+
+    # Run this block only if the button was clicked
+    if st.session_state[run_key]:
         with st.spinner("Running selected combos..."):
             results, model_curves, feature_importances_all = run_selected_combos(combo_matrix, selected_combos, features, target)
 
+        # Step 1: Create the DataFrame
         results_df = pd.DataFrame(results)
+
+        # Step 2: Compute the composite score
+        def compute_score(row):
+            penalty = 0.2 if row["# Test Samples"] < 15 else 0
+            return (
+                0.4 * row["ROC-AUC"] +
+                0.2 * row["Sensitivity"] +
+                0.2 * row["Specificity"] +
+                0.1 * row["Confidence"] -
+                penalty
+            )
+
+        results_df["Score"] = results_df.apply(compute_score, axis=1)
+
+        # Step 3: Reorder columns to put Score first
+        cols = ["Score"] + [col for col in results_df.columns if col != "Score"]
+        results_df = results_df[cols]
+
+        # Step 4: Sort by score
+        results_df = results_df.sort_values(by="Score", ascending=False)
+
+        # Step 5: Display
         st.markdown("### 📊 Results Summary")
         st.dataframe(results_df)
+
+
+        with st.expander("🎯 How Is the Score Calculated?", expanded=False):
+            st.markdown("""
+        | **Metric**     | **Why It Matters**                                      | **Suggested Weight** |
+        |----------------|----------------------------------------------------------|----------------------|
+        | ROC-AUC        | Most robust single metric for class separation           | `0.4`                |
+        | Sensitivity    | Key in PCOS (don't miss positives)                       | `0.2`                |
+        | Specificity    | Avoid overdiagnosing                                     | `0.2`                |
+        | Confidence     | Reflects prediction certainty                            | `0.1`                |
+        | Penalty        | -0.2 if test set < 15 samples (prevents overfitting bias)| `-0.2`               |
+
+        > 🧠 Final Score = Weighted Sum – Penalty  
+        > Higher is better. Values closer to 1.0 are best.
+            """)
+
 
         if not results_df.empty:
             st.markdown("### 📈 Combo Performance (ROC-AUC Area + Bar Plot)")
@@ -355,7 +405,7 @@ with tab2:
 # ========== Tab 1: PCOS Predictor Tool ==========
 with tab1:
     st.subheader("📋 Uploaded Data Preview")
-    with st.expander("Show DataFrame", expanded=True):
+    with st.expander("Show DataFrame", expanded=False):
         st.dataframe(data, hide_index=True)
 
     st.subheader("🔧 Advanced Model Training & Evaluation")
@@ -519,7 +569,7 @@ with tab1:
 
         return insights
 
-    with st.expander("Show Model Insight", expanded=False):
+    with st.expander("Show Model Insights:"):
         st.markdown("### 🧠 Model Insight Summary")
         model_insights = generate_model_insights(selected_model.get_params(), model_option)
         for insight in model_insights:
@@ -561,7 +611,7 @@ with tab1:
         y_pred = best_model.predict(X_test)
         y_prob = best_model.predict_proba(X_test)[:, 1]
 
-        st.success(f"✅ Best Parameters: {search.best_params_}")
+        # st.success(f"✅ Best Parameters: {search.best_params_}")
 
 
         # === Feature Importance ===
@@ -654,6 +704,7 @@ with tab1:
             "family_conditions_parkinsons",
             "family_conditions_osteoporosis",
         ]
+
         family_condition_fields = [col for col in family_condition_fields if col in X_train.columns]
 
         grouped_inputs = {
@@ -664,6 +715,9 @@ with tab1:
         }
 
         with st.sidebar.form("grouped_input_form"):
+            # Name input field
+            patient_name = st.text_input("👤 Patient Full Name", placeholder="e.g., Jane Doe")
+
             for section, fields in grouped_inputs.items():
                 with st.expander(section, expanded=False):
                     for col in fields:
@@ -754,7 +808,7 @@ with tab1:
                 return str(text).encode("latin-1", "replace").decode("latin-1")
 
             # === Redesigned PDF Report Function ===
-            def generate_clinical_pdf_report(input_df, prediction, confidence, feature_importance_df):
+            def generate_clinical_pdf_report(input_df, prediction, confidence, feature_importance_df, patient_name=None):
                 from fpdf import FPDF
                 import tempfile
                 import urllib.request
@@ -809,9 +863,14 @@ with tab1:
                 report_id = f"RPT-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
 
                 pdf.set_font("Arial", "B", 11)
-                pdf.cell(0, 8, f"Patient ID: {patient_id}    |    Report ID: {report_id}", ln=True)
+                if patient_name:
+                    pdf.cell(0, 8, f"Name: {sanitize_text(patient_name)}    |    Patient ID: {patient_id}", ln=True)
+                else:
+                    pdf.cell(0, 8, f"Patient ID: {patient_id}", ln=True)
+
+                pdf.cell(0, 6, f"Report ID: {report_id}", ln=True)
                 pdf.set_font("Arial", "", 10)
-                pdf.cell(0, 6, "Confidential - For Clinical Use Only", ln=True)
+                # pdf.cell(0, 6, "Confidential - For Clinical Use Only", ln=True)
                 pdf.ln(5)
 
                 # === PATIENT PROFILE (Survey-Inspired, Styled) ===
@@ -1068,11 +1127,11 @@ with tab1:
                 return tmp_path
 
             importance_df = pd.DataFrame({
-                "Feature": importances.index,
-                "Importance": importances.values
-            }).sort_values(by="Importance", ascending=False)
+                "Feature": features.columns if hasattr(importances, "__len__") and len(importances) == len(features.columns) else np.arange(len(importances)),
+                "Importance": importances if isinstance(importances, (list, np.ndarray)) else importances.values
+                }).sort_values(by="Importance", ascending=False)
 
-            pdf_path = generate_clinical_pdf_report(input_data, pred, prob, importance_df)
+            pdf_path = generate_clinical_pdf_report(input_data, pred, prob, importance_df, patient_name)
             with open(pdf_path, "rb") as f:
                 st.sidebar.download_button(
                     label="Download PDF Report",
@@ -1171,3 +1230,4 @@ with tab1:
                     color_discrete_map={0: "skyblue", 1: "salmon"}
                 )
                 st.plotly_chart(fig_pca)
+
