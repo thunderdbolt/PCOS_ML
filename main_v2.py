@@ -519,10 +519,11 @@ with tab1:
 
         return insights
 
-    st.markdown("### 🧠 Model Insight Summary")
-    model_insights = generate_model_insights(selected_model.get_params(), model_option)
-    for insight in model_insights:
-        st.markdown(insight)
+    with st.expander("Show Model Insight", expanded=True):
+        st.markdown("### 🧠 Model Insight Summary")
+        model_insights = generate_model_insights(selected_model.get_params(), model_option)
+        for insight in model_insights:
+            st.markdown(insight)
 
     # --- Search Type + Execution ---
     search_type = st.radio("🔍 Select Search Method", ["Grid Search", "Randomized Search"])
