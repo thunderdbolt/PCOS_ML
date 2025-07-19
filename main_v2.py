@@ -202,6 +202,8 @@ with tab2:
                 best_model = search.best_estimator_
                 y_pred = best_model.predict(X_test)
                 y_prob = best_model.predict_proba(X_test)[:, 1]
+                confidence_avg = np.mean(np.max(best_model.predict_proba(X_test), axis=1))
+
 
                 # Feature importance
                 if model_name == "Random Forest":
@@ -219,6 +221,7 @@ with tab2:
                     "Best Parameters": str(search.best_params_),
                     "ROC AUC": round(roc_auc_score(y_test, y_prob), 3),
                     "Accuracy": f"{accuracy_score(y_test, y_pred) * 100:.2f}%",
+                    "Confidence": f"{confidence_avg:.2f}",
                     "Top 5 Features": ", ".join(feat_imp)
                 })
 
@@ -234,7 +237,8 @@ with tab2:
 
     if results:
         st.subheader("📋 Combo Run Results")
-        st.dataframe(pd.DataFrame(results))
+        st.dataframe(pd.DataFrame(results)[["Combo ID", "Split Ratio", "Accuracy", "ROC AUC", "Confidence", "Top 5 Features", "Best Parameters"]])
+
 
 # ========== Tab 1: PCOS Predictor Tool ==========
 with tab1:
@@ -265,30 +269,152 @@ with tab1:
     }
     cv = cv_options[cv_method]
 
-    # --- Model selection ---
+    # --- Model selection & manual input with tuning ---
     model_option = st.selectbox("🧠 Select a Model for Tuning", ["Random Forest", "Logistic Regression", "SVM"])
+    selected_params = {}
+
     if model_option == "Random Forest":
-        selected_model = RandomForestClassifier(random_state=42, class_weight="balanced")
+        st.subheader("🌲 Random Forest Parameters")
+
+        n_estimators = st.slider("n_estimators", 50, 200, 100)
+        max_depth = st.selectbox("max_depth", [None, 5, 10, 20], index=2)  # Default = 10
+        min_samples_split = st.slider("min_samples_split", 2, 10, 2)
+
+        selected_model = RandomForestClassifier(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_split=min_samples_split,
+            class_weight="balanced",
+            random_state=42
+        )
+
+        # Grid search will still explore if you include these in the param grid
         selected_params = {
-            "n_estimators": [50, 100],
+            # Remove from here if you don't want them tuned
             "max_depth": [None, 10, 20],
             "min_samples_split": [2, 5]
         }
+
     elif model_option == "Logistic Regression":
-        selected_model = LogisticRegression(max_iter=1000, class_weight="balanced", solver="liblinear")
+        st.subheader("📈 Logistic Regression Parameters")
+
+        C = st.select_slider("C (Regularization Strength)", [0.01, 0.1, 1.0, 10.0], value=1.0)
+
+        selected_model = LogisticRegression(
+            C=C,
+            penalty="l2",
+            solver="liblinear",
+            max_iter=1000,
+            class_weight="balanced"
+        )
+
         selected_params = {
-            "C": [0.01, 0.1, 1, 10],
-            "penalty": ["l2"]
+            "C": [0.01, 0.1, 1.0, 10.0]
         }
+
     elif model_option == "SVM":
-        selected_model = SVC(probability=True, class_weight="balanced")
+        st.subheader("📊 SVM Parameters")
+
+        C = st.select_slider("C", [0.1, 1.0, 10.0], value=1.0)
+        gamma = st.selectbox("gamma", ["scale", "auto"], index=0)
+
+        selected_model = SVC(
+            C=C,
+            gamma=gamma,
+            kernel="rbf",
+            probability=True,
+            class_weight="balanced"
+        )
+
         selected_params = {
-            "C": [0.1, 1, 10],
-            "kernel": ["rbf"],
+            "C": [0.1, 1.0, 10.0],
             "gamma": ["scale", "auto"]
         }
 
+    # Show parameter overview
+    # st.markdown("### 🔍 Parameter Overview")
+    # st.write("🔧 Fixed Parameters", selected_model.get_params())
+    # st.write("🎯 Tunable Parameters", selected_params)
+
+    # Model insight summary
+    def generate_model_insights(params, model_type):
+        insights = []
+        if model_type == "Random Forest":
+            md = params.get("max_depth")
+            if md is None:
+                insights.append("⚠️ `max_depth=None`: Trees will grow until pure → likely to **overfit**.")
+            elif md <= 5:
+                insights.append(f"✅ `max_depth={md}`: Shallow trees → likely **fast** and **generalizable**.")
+            elif md > 15:
+                insights.append(f"⚠️ `max_depth={md}`: Deep trees → could **overfit** small patterns.")
+            else:
+                insights.append(f"• `max_depth={md}`: Balanced depth for moderate complexity.")
+
+            mss = params.get("min_samples_split", 2)
+            if mss <= 2:
+                insights.append("⚠️ `min_samples_split=2`: Splits aggressively → could **overfit**.")
+            elif mss >= 10:
+                insights.append("✅ Higher `min_samples_split` → more conservative, likely to **generalize better**.")
+            else:
+                insights.append(f"• `min_samples_split={mss}`: Reasonable node size requirement.")
+
+            ne = params.get("n_estimators", 100)
+            if ne < 50:
+                insights.append(f"⚠️ Only `{ne}` trees → might be **unstable** on noisy data.")
+            elif ne > 200:
+                insights.append(f"✅ `{ne}` trees → strong ensemble, but **slower training**.")
+            else:
+                insights.append(f"• `{ne}` trees → balances performance and speed.")
+
+            if params.get("class_weight") == "balanced":
+                insights.append("• Class imbalance handled with `class_weight='balanced'` → helps in skewed datasets.")
+
+            if params.get("max_features") == "sqrt":
+                insights.append("• `max_features='sqrt'`: Ensures randomness per split → reduces correlation between trees.")
+
+        elif model_type == "Logistic Regression":
+            C = params.get("C", 1.0)
+            if C < 0.1:
+                insights.append(f"✅ `C={C}` → High regularization → avoids overfitting.")
+            elif C > 10:
+                insights.append(f"⚠️ `C={C}` → Low regularization → may **overfit** complex data.")
+            else:
+                insights.append(f"• `C={C}` → Balanced between regularization and flexibility.")
+
+            solver = params.get("solver", "")
+            insights.append(f"• Using solver: `{solver}` → affects speed and convergence for different penalties.")
+
+            if params.get("class_weight") == "balanced":
+                insights.append("• Class imbalance handled with `class_weight='balanced'`.")
+
+        elif model_type == "SVM":
+            C = params.get("C", 1.0)
+            if C < 0.5:
+                insights.append(f"✅ `C={C}` → Smoother margin, less prone to overfitting.")
+            elif C > 10:
+                insights.append(f"⚠️ `C={C}` → Very tight margin → model might **overfit** outliers.")
+            else:
+                insights.append(f"• `C={C}` → Balanced decision boundary.")
+
+            gamma = params.get("gamma", "scale")
+            if gamma == "auto":
+                insights.append("⚠️ `gamma='auto'` uses 1/#features → can lead to **overfitting**.")
+            elif gamma == "scale":
+                insights.append("✅ `gamma='scale'` adapts to data variance → usually safer.")
+
+            if params.get("class_weight") == "balanced":
+                insights.append("• Class imbalance handled with `class_weight='balanced'`.")
+
+        return insights
+
+    st.markdown("### 🧠 Model Insight Summary")
+    model_insights = generate_model_insights(selected_model.get_params(), model_option)
+    for insight in model_insights:
+        st.markdown(insight)
+
+    # --- Search Type + Execution ---
     search_type = st.radio("🔍 Select Search Method", ["Grid Search", "Randomized Search"])
+
     if "tuning_done" not in st.session_state:
         st.session_state.tuning_done = False
 
@@ -298,7 +424,6 @@ with tab1:
     if st.session_state.tuning_done:
         st.info("Running model tuning... Please wait ⏳")
 
-        # Hyperparameter Search
         if search_type == "Grid Search":
             search = GridSearchCV(
                 selected_model, selected_params, cv=cv,
@@ -324,6 +449,7 @@ with tab1:
         y_prob = best_model.predict_proba(X_test)[:, 1]
 
         st.success(f"✅ Best Parameters: {search.best_params_}")
+
 
         # === Feature Importance ===
         st.markdown("### 🔬 Feature Importance")
@@ -932,4 +1058,6 @@ with tab1:
                     color_discrete_map={0: "skyblue", 1: "salmon"}
                 )
                 st.plotly_chart(fig_pca)
+
+
 
