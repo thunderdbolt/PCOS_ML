@@ -519,7 +519,7 @@ with tab1:
 
         return insights
 
-    with st.expander("Show Model Insight", expanded=True):
+    with st.expander("Show Model Insight", expanded=False):
         st.markdown("### 🧠 Model Insight Summary")
         model_insights = generate_model_insights(selected_model.get_params(), model_option)
         for insight in model_insights:
