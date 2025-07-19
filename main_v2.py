@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
 import plotly.figure_factory as ff
+import plotly.graph_objects as go
 import streamlit as st
 
 from PIL import Image
@@ -43,12 +44,12 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 st.sidebar.header("📤 Upload Real Survey Data")
 uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 
-# if uploaded_file is None:
-#     st.info("Please upload a CSV file containing real survey responses.")
-#     st.stop()
+if uploaded_file is None:
+    st.info("Please upload a CSV file containing real survey responses.")
+    st.stop()
 
+# data = pd.read_csv(uploaded_file)
 data = pd.read_csv("PCOS_Data.csv")
-
 # ========== Preprocessing Utilities ==========
 ordinal_maps = {
     "never": 0, "rarely": 1, "sometimes": 2, "often": 3, "very often": 4,
@@ -118,126 +119,233 @@ with tab2:
     with st.expander("Show DataFrame", expanded=True):
         st.dataframe(data, hide_index=True)
 
-    st.subheader("🧪 Experiment Plan – Combo Selector")
+    # Placeholder: Define features and target
+    target_col = "has_pcos"
+    features = data.drop(columns=[target_col])
+    target = data[target_col]
 
-    default_combo_df = pd.DataFrame([
-        ["C1", 0.2, "Stratified K-Fold", "Random Forest", "Grid Search", 100, "Balanced performance with tree-based model"],
-        ["C2", 0.3, "Repeated Stratified K-Fold", "Random Forest", "Randomized Search", 100, "More generalization + noise tolerance"],
-        ["C3", 0.2, "Stratified K-Fold", "Logistic Regression", "Grid Search", None, "Interpretable baseline model"],
-        ["C4", 0.4, "K-Fold", "Logistic Regression", "Randomized Search", None, "Stress test with less training data"],
-        ["C5", 0.25, "Stratified K-Fold", "SVM", "Grid Search", None, "Margin-based classifier on balanced split"],
-        ["C6", 0.3, "Repeated Stratified K-Fold", "SVM", "Randomized Search", None, "Kernel model tested for stability"],
-        ["C7", 0.5, "Stratified K-Fold", "Random Forest", "Grid Search", 50, "Risky split – checking model consistency"],
-        ["C8", 0.15, "Stratified K-Fold", "Logistic Regression", "Grid Search", None, "High training volume, small test risk"],
-        ["C9", 0.2, "K-Fold", "SVM", "Grid Search", None, "Moderate CV without stratification"],
-        ["C10", 0.4, "Stratified K-Fold", "Random Forest", "Grid Search", 200, "Imbalance sensitivity check"]
-    ], columns=[
-        "Combo ID", "Train/Test Split", "Cross-Validation", "Model", 
-        "Search Type", "n_estimators", "Key Insight Target"
+    # Combo Matrix Definition with editable options
+    default_data = pd.DataFrame([
+        {"Combo ID": "C1", "Split": 0.2, "CV": "StratifiedKFold", "Model": "Random Forest", "Search": "Grid"},
+        {"Combo ID": "C2", "Split": 0.3, "CV": "RepeatedStratifiedKFold", "Model": "Random Forest", "Search": "Random"},
+        {"Combo ID": "C3", "Split": 0.2, "CV": "StratifiedKFold", "Model": "Logistic Regression", "Search": "Grid"},
+        {"Combo ID": "C4", "Split": 0.4, "CV": "KFold", "Model": "Logistic Regression", "Search": "Random"},
+        {"Combo ID": "C5", "Split": 0.25, "CV": "StratifiedKFold", "Model": "SVM", "Search": "Grid"},
+        {"Combo ID": "C6", "Split": 0.3, "CV": "RepeatedStratifiedKFold", "Model": "SVM", "Search": "Random"},
+        {"Combo ID": "C7", "Split": 0.5, "CV": "StratifiedKFold", "Model": "Random Forest", "Search": "Grid"},
+        {"Combo ID": "C8", "Split": 0.15, "CV": "StratifiedKFold", "Model": "Logistic Regression", "Search": "Grid"},
+        {"Combo ID": "C9", "Split": 0.2, "CV": "KFold", "Model": "SVM", "Search": "Grid"},
+        {"Combo ID": "C10", "Split": 0.4, "CV": "StratifiedKFold", "Model": "Random Forest", "Search": "Grid"}
     ])
 
-    edited_combo_df = st.data_editor(default_combo_df, num_rows="fixed", key="experiment_table")
-    selected_combos = st.multiselect("🔍 Select Combo/s ID to Run", edited_combo_df["Combo ID"].tolist())
-    run_button = st.button("🚀 Run Selected Combos")
-
-    # Mapping for CV strategies
-    cv_map = {
-        "Stratified K-Fold": StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
-        "K-Fold": KFold(n_splits=5, shuffle=True, random_state=42),
-        "Repeated Stratified K-Fold": RepeatedStratifiedKFold(n_splits=5, n_repeats=2, random_state=42)
+    edit_types = {
+        "CV": st.column_config.SelectboxColumn(
+            "Cross-Validation", options=["StratifiedKFold", "RepeatedStratifiedKFold", "KFold"]
+        ),
+        "Model": st.column_config.SelectboxColumn(
+            "Model", options=["Random Forest", "Logistic Regression", "SVM"]
+        ),
+        "Search": st.column_config.SelectboxColumn(
+            "Search Method", options=["Grid", "Random"]
+        )
     }
 
-    results = []
+    st.markdown("### 📋 Combo Configuration Matrix")
+    combo_matrix = st.data_editor(default_data, column_config=edit_types, use_container_width=False)
 
-    if run_button:
+    with st.expander("🧠 Methodology Note", expanded=False):
+        st.markdown("""
+        #### 🧠 Methodology Note
+        In our sensitivity analysis, we optimized key hyperparameters for each model to balance performance, interpretability, and runtime feasibility.
+
+        - **🔹 SVM (Support Vector Machine)**  
+            - **Dynamic (Tuned)**: `C`, `gamma`, `kernel` (tested with `'rbf'`, `'linear'`, `'poly'`)  
+            - **Fixed**:  
+                - `probability=True`: allows probability-based predictions for ROC analysis  
+                - `class_weight='balanced'`: ensures fairness between majority and minority classes
+
+        - **🌲 Random Forest**  
+            - **Dynamic (Tuned)**: `n_estimators`, `max_depth`, `min_samples_split`, `min_samples_leaf`  
+            - **Fixed**:  
+                - `class_weight='balanced'`: adjusts weights inversely proportional to class frequencies  
+                - `max_features='sqrt'`: kept constant for consistent feature sampling per tree  
+                - `bootstrap=True`: standard setting for sampling with replacement
+
+        - **📈 Logistic Regression**  
+            - **Dynamic (Tuned)**: `C`, `penalty='l2'`  
+            - **Fixed**:  
+                - `solver='liblinear'`: compatible with small datasets and `l1/l2` penalties  
+                - `class_weight='balanced'`: ensures model doesn't ignore minority class  
+                - `penalty='l1'`: not included yet due to complexity of coefficient shrinkage; can be added later
+
+        > 📌 In future experiments, we may include additional hyperparameters (e.g., `max_features` for Random Forest or `'l1'` regularization in Logistic Regression) to extract further insights.
+        """)
+
+    selected_combos = st.multiselect("🎛️ Select Combo IDs to Run", options=combo_matrix["Combo ID"].tolist())
+    results = []
+    model_curves = {}
+
+    # Define a key for the button
+    run_key = "run_combos_clicked"
+
+    # Initialize the state if not already set
+    if run_key not in st.session_state:
+        st.session_state[run_key] = False
+
+    # Create the button and update the session state
+    if st.button("🚀 Run Selected Combos"):
+    #     st.session_state[run_key] = True
+
+    # # Use session state value to trigger processing
+    # if st.session_state[run_key]:
+    #     # Your combo execution logic goes here...
+    #     st.success("Running selected combos...")
+
+        feature_importances_all = {}
+
         for combo_id in selected_combos:
-            row = edited_combo_df[edited_combo_df["Combo ID"] == combo_id].iloc[0]
-            split_ratio = float(row["Train/Test Split"])
-            cv_name = row["Cross-Validation"]
-            model_name = row["Model"]
-            search_type = row["Search Type"]
-            custom_estimators = row["n_estimators"] if pd.notna(row["n_estimators"]) else 100
+            config = combo_matrix[combo_matrix["Combo ID"] == combo_id].iloc[0]
+
+            X_train, X_test, y_train, y_test = train_test_split(
+                features, target,
+                test_size=config["Split"], stratify=target, random_state=42
+            )
+
+            cv_map = {
+                "StratifiedKFold": StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+                "RepeatedStratifiedKFold": RepeatedStratifiedKFold(n_splits=5, n_repeats=2, random_state=42),
+                "KFold": KFold(n_splits=5, shuffle=True, random_state=42)
+            }
+            cv = cv_map[config["CV"]]
+
+            tuned_params = {}
+            if config["Model"] == "Random Forest":
+                model = RandomForestClassifier(class_weight="balanced", random_state=42)
+                tuned_params = {
+                    "n_estimators": [100, 150, 200],
+                    "max_depth": [None, 10, 20],
+                    "min_samples_split": [2, 5],
+                    "min_samples_leaf": [1, 2, 4]
+                }
+            elif config["Model"] == "Logistic Regression":
+                model = LogisticRegression(max_iter=1000, solver="liblinear", class_weight="balanced")
+                tuned_params = {
+                    "C": [0.01, 0.1, 1.0, 10.0],
+                    "penalty": ["l2"]
+                }
+            elif config["Model"] == "SVM":
+                model = SVC(probability=True, class_weight="balanced")
+                tuned_params = {
+                    "C": [0.1, 1.0, 10.0],
+                    "gamma": ["scale", "auto"],
+                    "kernel": ["rbf", "linear", "poly"]
+                }
+
+            if config["Search"] == "Grid":
+                search = GridSearchCV(model, tuned_params, cv=cv, scoring="roc_auc", n_jobs=-1, error_score=np.nan)
+            else:
+                search = RandomizedSearchCV(model, tuned_params, cv=cv, scoring="roc_auc", n_jobs=-1, random_state=42, n_iter=10, error_score=np.nan)
 
             try:
-                # Split data
-                X_train, X_test, y_train, y_test = train_test_split(
-                    features, target,
-                    test_size=split_ratio,
-                    stratify=target,
-                    random_state=42
-                )
-
-                # Get CV strategy
-                cv = cv_map.get(cv_name)
-
-                # Select model and hyperparameters
-                if model_name == "Random Forest":
-                    model = RandomForestClassifier(random_state=42, class_weight="balanced")
-                    param_grid = {
-                        "n_estimators": [int(custom_estimators)],
-                        "max_depth": [None, 10, 20],
-                        "min_samples_split": [2, 5]
-                    }
-                elif model_name == "Logistic Regression":
-                    model = LogisticRegression(max_iter=1000, class_weight="balanced", solver="liblinear")
-                    param_grid = {
-                        "C": [0.01, 0.1, 1, 10],
-                        "penalty": ["l2"]
-                    }
-                elif model_name == "SVM":
-                    model = SVC(probability=True, class_weight="balanced")
-                    param_grid = {
-                        "C": [0.1, 1, 10],
-                        "kernel": ["rbf"],
-                        "gamma": ["scale", "auto"]
-                    }
-
-                # Select search method
-                if search_type == "Grid Search":
-                    search = GridSearchCV(model, param_grid, cv=cv, scoring='roc_auc', n_jobs=-1, error_score=np.nan)
-                else:
-                    search = RandomizedSearchCV(model, param_grid, n_iter=10, cv=cv, scoring='roc_auc', n_jobs=-1, random_state=42, error_score=np.nan)
-
                 search.fit(X_train, y_train)
                 best_model = search.best_estimator_
                 y_pred = best_model.predict(X_test)
                 y_prob = best_model.predict_proba(X_test)[:, 1]
+                acc = accuracy_score(y_test, y_pred)
+                roc = roc_auc_score(y_test, y_prob)
                 confidence_avg = np.mean(np.max(best_model.predict_proba(X_test), axis=1))
+                warning = "⚠️" if config["Split"] < 0.2 else ""
 
+                tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+                sensitivity = tp / (tp + fn) if (tp + fn) else 0
+                specificity = tn / (tn + fp) if (tn + fp) else 0
 
-                # Feature importance
-                if model_name == "Random Forest":
-                    feat_imp = list(pd.Series(best_model.feature_importances_, index=features.columns).sort_values(ascending=False).head(5).index)
-                elif model_name == "Logistic Regression":
-                    feat_imp = list(pd.Series(best_model.coef_[0], index=features.columns).abs().sort_values(ascending=False).head(5).index)
-                elif model_name == "SVM" and hasattr(best_model, "coef_"):
-                    feat_imp = list(pd.Series(best_model.coef_[0], index=features.columns).abs().sort_values(ascending=False).head(5).index)
-                else:
-                    feat_imp = ["N/A"]
-
+                params = search.best_params_
                 results.append({
-                    "Combo ID": combo_id,
-                    "Split Ratio": f"{int((1-split_ratio)*100)}/{int(split_ratio*100)}",
-                    "Best Parameters": str(search.best_params_),
-                    "ROC AUC": round(roc_auc_score(y_test, y_prob), 3),
-                    "Accuracy": f"{accuracy_score(y_test, y_pred) * 100:.2f}%",
-                    "Confidence": f"{confidence_avg:.2f}",
-                    "Top 5 Features": ", ".join(feat_imp)
+                    "Combo ID": f"{combo_id} {warning}",
+                    "Accuracy": round(acc, 2),
+                    "ROC-AUC": round(roc, 2),
+                    "Sensitivity": round(sensitivity, 2),
+                    "Specificity": round(specificity, 2),
+                    "Confidence": round(confidence_avg, 2),
+                    "Search Method": config["Search"],
+                    "Model": config["Model"],
+                    "n_estimators": params.get("n_estimators", "N/A"),
+                    "max_depth": params.get("max_depth", "N/A"),
+                    "min_samples_split": params.get("min_samples_split", "N/A"),
+                    "C": params.get("C", "N/A"),
+                    "gamma": params.get("gamma", "N/A"),
+                    "Best Params": params
                 })
+
+                fpr, tpr, _ = roc_curve(y_test, y_prob)
+                model_curves[combo_id] = (fpr, tpr, config["Model"])
+
+                if config["Model"] == "Random Forest":
+                    feature_importances_all[combo_id] = best_model.feature_importances_
 
             except Exception as e:
                 results.append({
                     "Combo ID": combo_id,
-                    "Split Ratio": f"{int((1-split_ratio)*100)}/{int(split_ratio*100)}",
-                    "Best Parameters": "Error",
-                    "ROC AUC": "Error",
-                    "Accuracy": "Error",
-                    "Top 5 Features": str(e)
+                    "Accuracy": None,
+                    "ROC-AUC": None,
+                    "Sensitivity": None,
+                    "Specificity": None,
+                    "Confidence": None,
+                    "Search Method": config["Search"],
+                    "Model": config["Model"],
+                    "n_estimators": "N/A",
+                    "max_depth": "N/A",
+                    "min_samples_split": "N/A",
+                    "C": "N/A",
+                    "gamma": "N/A",
+                    "Best Params": str(e)
                 })
 
-    if results:
-        st.subheader("📋 Combo Run Results")
-        st.dataframe(pd.DataFrame(results)[["Combo ID", "Split Ratio", "Accuracy", "ROC AUC", "Confidence", "Top 5 Features", "Best Parameters"]])
+        results_df = pd.DataFrame(results)
+        st.markdown("### 📊 Results Summary")
+        st.dataframe(results_df)
+
+        if not results_df.empty:
+            st.markdown("### 📈 Combo Performance (ROC-AUC Area + Bar Plot)")
+            plot_df = results_df.dropna(subset=["ROC-AUC"])
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=plot_df["Combo ID"], y=plot_df["ROC-AUC"], name="ROC-AUC", marker_color='indianred'))
+            fig.add_trace(go.Scatter(x=plot_df["Combo ID"], y=plot_df["ROC-AUC"], fill='tozeroy', name="Area Under Curve", mode="lines", line=dict(color="lightblue")))
+            fig.update_layout(title="ROC-AUC Scores per Combo", xaxis_title="Combo ID", yaxis_title="ROC-AUC", height=400)
+            st.plotly_chart(fig)
+
+            if feature_importances_all:
+                st.markdown("### 🌲 Feature Importances (Random Forest Only)")
+                cols = st.columns(len(feature_importances_all))
+                for idx, (combo_id, importances) in enumerate(feature_importances_all.items()):
+                    fi_df = pd.DataFrame({"Feature": features.columns, "Importance": importances}).sort_values("Importance", ascending=False)
+                    fig = px.bar(fi_df.head(10), x="Importance", y="Feature", orientation="h", title=f"{combo_id} – Top Features")
+                    cols[idx].plotly_chart(fig, use_container_width=True)
+
+            col07, col08 = st.columns([3, 2])
+
+            if model_curves:
+                # st.markdown("### 🧪 ROC Curve per Model")
+                # for combo_id, (fpr, tpr, model_type) in model_curves.items():
+                #     fig = go.Figure()
+                #     fig.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', fill='tozeroy', name=f"{combo_id} ({model_type})"))
+                #     fig.update_layout(title=f"ROC Curve for {combo_id} – {model_type}", xaxis_title="False Positive Rate", yaxis_title="True Positive Rate")
+                #     st.plotly_chart(fig, use_container_width=True)
+
+                # st.markdown("### 📊 ROC Overlay: All Models")
+                fig = go.Figure()
+                color_map = {"Random Forest": "blue", "Logistic Regression": "red", "SVM": "green"}
+                for combo_id, (fpr, tpr, model_type) in model_curves.items():
+                    fig.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f"{combo_id} ({model_type})", fill='tonexty', line=dict(color=color_map.get(model_type, None))))
+                fig.update_layout(xaxis_title="False Positive Rate", yaxis_title="True Positive Rate")
+                with col07:
+                    st.markdown("### 📊 ROC Overlay: All Models")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with col08:
+                st.markdown("### 📋 Final Evaluation Table")
+                st.dataframe(results_df[["Combo ID", "Accuracy", "Sensitivity", "Specificity", "ROC-AUC"]], use_container_width=True)
 
 
 # ========== Tab 1: PCOS Predictor Tool ==========
@@ -1058,6 +1166,4 @@ with tab1:
                     color_discrete_map={0: "skyblue", 1: "salmon"}
                 )
                 st.plotly_chart(fig_pca)
-
-
 
