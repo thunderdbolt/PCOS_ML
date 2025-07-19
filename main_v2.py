@@ -479,18 +479,20 @@ with tab1:
 
         C = st.select_slider("C", [0.1, 1.0, 10.0], value=1.0)
         gamma = st.selectbox("gamma", ["scale", "auto"], index=0)
+        kernel = st.selectbox("kernel", ["rbf", "linear", "poly"], index=0)
 
         selected_model = SVC(
             C=C,
             gamma=gamma,
-            kernel="rbf",
+            kernel=kernel,
             probability=True,
             class_weight="balanced"
         )
 
         selected_params = {
             "C": [0.1, 1.0, 10.0],
-            "gamma": ["scale", "auto"]
+            "gamma": ["scale", "auto"],
+            "kernel": ["rbf", "linear", "poly"]
         }
 
     # Show parameter overview
@@ -1230,4 +1232,3 @@ with tab1:
                     color_discrete_map={0: "skyblue", 1: "salmon"}
                 )
                 st.plotly_chart(fig_pca)
-
