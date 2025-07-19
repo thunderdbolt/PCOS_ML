@@ -50,6 +50,7 @@ uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 
 # data = pd.read_csv(uploaded_file)
 data = pd.read_csv("PCOS_Data.csv")
+
 # ========== Preprocessing Utilities ==========
 ordinal_maps = {
     "never": 0, "rarely": 1, "sometimes": 2, "often": 3, "very often": 4,
@@ -91,6 +92,114 @@ def preprocess_family_conditions(df):
         df[f"family_conditions_{cond}"] = df["family_conditions"].str.contains(cond, case=False, na=False).astype(int)
 
     return df
+
+@st.cache_data(show_spinner=False)
+def run_selected_combos(combo_matrix, selected_combos, features, target):
+    from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve, accuracy_score
+    results = []
+    model_curves = {}
+    feature_importances_all = {}
+
+    cv_map = {
+        "StratifiedKFold": StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+        "RepeatedStratifiedKFold": RepeatedStratifiedKFold(n_splits=5, n_repeats=2, random_state=42),
+        "KFold": KFold(n_splits=5, shuffle=True, random_state=42)
+    }
+
+    for combo_id in selected_combos:
+        config = combo_matrix[combo_matrix["Combo ID"] == combo_id].iloc[0]
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            features, target,
+            test_size=config["Split"], stratify=target, random_state=42
+        )
+
+        cv = cv_map[config["CV"]]
+
+        # Model & param setup
+        if config["Model"] == "Random Forest":
+            model = RandomForestClassifier(class_weight="balanced", random_state=42)
+            tuned_params = {
+                "n_estimators": [100, 150, 200],
+                "max_depth": [None, 10, 20],
+                "min_samples_split": [2, 5],
+                "min_samples_leaf": [1, 2, 4]
+            }
+        elif config["Model"] == "Logistic Regression":
+            model = LogisticRegression(max_iter=1000, solver="liblinear", class_weight="balanced")
+            tuned_params = {
+                "C": [0.01, 0.1, 1.0, 10.0],
+                "penalty": ["l2"]
+            }
+        elif config["Model"] == "SVM":
+            model = SVC(probability=True, class_weight="balanced")
+            tuned_params = {
+                "C": [0.1, 1.0, 10.0],
+                "gamma": ["scale", "auto"],
+                "kernel": ["rbf", "linear", "poly"]
+            }
+
+        if config["Search"] == "Grid":
+            search = GridSearchCV(model, tuned_params, cv=cv, scoring="roc_auc", n_jobs=-1, error_score=np.nan)
+        else:
+            search = RandomizedSearchCV(model, tuned_params, cv=cv, n_iter=10, random_state=42, scoring="roc_auc", n_jobs=-1, error_score=np.nan)
+
+        try:
+            search.fit(X_train, y_train)
+            best_model = search.best_estimator_
+            y_pred = best_model.predict(X_test)
+            y_prob = best_model.predict_proba(X_test)[:, 1]
+            acc = accuracy_score(y_test, y_pred)
+            roc = roc_auc_score(y_test, y_prob)
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+            sensitivity = tp / (tp + fn) if (tp + fn) else 0
+            specificity = tn / (tn + fp) if (tn + fp) else 0
+            confidence_avg = np.mean(np.max(best_model.predict_proba(X_test), axis=1))
+            warning = "⚠️" if config["Split"] < 0.2 else ""
+            params = search.best_params_
+
+            results.append({
+                "Combo ID": f"{combo_id} {warning}",
+                "Accuracy": round(acc, 2),
+                "ROC-AUC": round(roc, 2),
+                "Sensitivity": round(sensitivity, 2),
+                "Specificity": round(specificity, 2),
+                "Confidence": round(confidence_avg, 2),
+                "Search Method": config["Search"],
+                "Model": config["Model"],
+                "n_estimators": params.get("n_estimators", "N/A"),
+                "max_depth": params.get("max_depth", "N/A"),
+                "min_samples_split": params.get("min_samples_split", "N/A"),
+                "C": params.get("C", "N/A"),
+                "gamma": params.get("gamma", "N/A"),
+                "Best Params": params
+            })
+
+            fpr, tpr, _ = roc_curve(y_test, y_prob)
+            model_curves[combo_id] = (fpr, tpr, config["Model"])
+
+            if config["Model"] == "Random Forest":
+                feature_importances_all[combo_id] = best_model.feature_importances_
+
+        except Exception as e:
+            results.append({
+                "Combo ID": combo_id,
+                "Accuracy": None,
+                "ROC-AUC": None,
+                "Sensitivity": None,
+                "Specificity": None,
+                "Confidence": None,
+                "Search Method": config["Search"],
+                "Model": config["Model"],
+                "n_estimators": "N/A",
+                "max_depth": "N/A",
+                "min_samples_split": "N/A",
+                "C": "N/A",
+                "gamma": "N/A",
+                "Best Params": str(e)
+            })
+
+    return results, model_curves, feature_importances_all
 
 # Apply preprocessing once
 # Step 1: Generate clean binary flags from family_conditions text
@@ -194,113 +303,8 @@ with tab2:
 
     # Create the button and update the session state
     if st.button("🚀 Run Selected Combos"):
-    #     st.session_state[run_key] = True
-
-    # # Use session state value to trigger processing
-    # if st.session_state[run_key]:
-    #     # Your combo execution logic goes here...
-    #     st.success("Running selected combos...")
-
-        feature_importances_all = {}
-
-        for combo_id in selected_combos:
-            config = combo_matrix[combo_matrix["Combo ID"] == combo_id].iloc[0]
-
-            X_train, X_test, y_train, y_test = train_test_split(
-                features, target,
-                test_size=config["Split"], stratify=target, random_state=42
-            )
-
-            cv_map = {
-                "StratifiedKFold": StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
-                "RepeatedStratifiedKFold": RepeatedStratifiedKFold(n_splits=5, n_repeats=2, random_state=42),
-                "KFold": KFold(n_splits=5, shuffle=True, random_state=42)
-            }
-            cv = cv_map[config["CV"]]
-
-            tuned_params = {}
-            if config["Model"] == "Random Forest":
-                model = RandomForestClassifier(class_weight="balanced", random_state=42)
-                tuned_params = {
-                    "n_estimators": [100, 150, 200],
-                    "max_depth": [None, 10, 20],
-                    "min_samples_split": [2, 5],
-                    "min_samples_leaf": [1, 2, 4]
-                }
-            elif config["Model"] == "Logistic Regression":
-                model = LogisticRegression(max_iter=1000, solver="liblinear", class_weight="balanced")
-                tuned_params = {
-                    "C": [0.01, 0.1, 1.0, 10.0],
-                    "penalty": ["l2"]
-                }
-            elif config["Model"] == "SVM":
-                model = SVC(probability=True, class_weight="balanced")
-                tuned_params = {
-                    "C": [0.1, 1.0, 10.0],
-                    "gamma": ["scale", "auto"],
-                    "kernel": ["rbf", "linear", "poly"]
-                }
-
-            if config["Search"] == "Grid":
-                search = GridSearchCV(model, tuned_params, cv=cv, scoring="roc_auc", n_jobs=-1, error_score=np.nan)
-            else:
-                search = RandomizedSearchCV(model, tuned_params, cv=cv, scoring="roc_auc", n_jobs=-1, random_state=42, n_iter=10, error_score=np.nan)
-
-            try:
-                search.fit(X_train, y_train)
-                best_model = search.best_estimator_
-                y_pred = best_model.predict(X_test)
-                y_prob = best_model.predict_proba(X_test)[:, 1]
-                acc = accuracy_score(y_test, y_pred)
-                roc = roc_auc_score(y_test, y_prob)
-                confidence_avg = np.mean(np.max(best_model.predict_proba(X_test), axis=1))
-                warning = "⚠️" if config["Split"] < 0.2 else ""
-
-                tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
-                sensitivity = tp / (tp + fn) if (tp + fn) else 0
-                specificity = tn / (tn + fp) if (tn + fp) else 0
-
-                params = search.best_params_
-                results.append({
-                    "Combo ID": f"{combo_id} {warning}",
-                    "Accuracy": round(acc, 2),
-                    "ROC-AUC": round(roc, 2),
-                    "Sensitivity": round(sensitivity, 2),
-                    "Specificity": round(specificity, 2),
-                    "Confidence": round(confidence_avg, 2),
-                    "Search Method": config["Search"],
-                    "Model": config["Model"],
-                    "n_estimators": params.get("n_estimators", "N/A"),
-                    "max_depth": params.get("max_depth", "N/A"),
-                    "min_samples_split": params.get("min_samples_split", "N/A"),
-                    "C": params.get("C", "N/A"),
-                    "gamma": params.get("gamma", "N/A"),
-                    "Best Params": params
-                })
-
-                fpr, tpr, _ = roc_curve(y_test, y_prob)
-                model_curves[combo_id] = (fpr, tpr, config["Model"])
-
-                if config["Model"] == "Random Forest":
-                    feature_importances_all[combo_id] = best_model.feature_importances_
-
-            except Exception as e:
-                results.append({
-                    "Combo ID": combo_id,
-                    "Accuracy": None,
-                    "ROC-AUC": None,
-                    "Sensitivity": None,
-                    "Specificity": None,
-                    "Confidence": None,
-                    "Search Method": config["Search"],
-                    "Model": config["Model"],
-                    "n_estimators": "N/A",
-                    "max_depth": "N/A",
-                    "min_samples_split": "N/A",
-                    "C": "N/A",
-                    "gamma": "N/A",
-                    "Best Params": str(e)
-                })
+        with st.spinner("Running selected combos..."):
+            results, model_curves, feature_importances_all = run_selected_combos(combo_matrix, selected_combos, features, target)
 
         results_df = pd.DataFrame(results)
         st.markdown("### 📊 Results Summary")
@@ -1166,4 +1170,3 @@ with tab1:
                     color_discrete_map={0: "skyblue", 1: "salmon"}
                 )
                 st.plotly_chart(fig_pca)
-
